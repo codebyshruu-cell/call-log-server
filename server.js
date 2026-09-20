@@ -59,5 +59,32 @@ app.get("/api/devices/:deviceId", async (req, res) => {
   res.json(d);
 });
 
+// Download device logs as CSV
+app.get("/api/devices/:deviceId/csv", async (req, res) => {
+  try {
+    const device = await Device.findOne({ deviceId: req.params.deviceId });
+    if (!device) return res.status(404).send("Device not found");
+
+    const header = "Name,Number,Type,Duration(s),Time\n";
+    const rows = (device.logs || [])
+      .map((l) => {
+        const name = (l.name || "").replace(/,/g, " ");
+        const number = (l.number || "").replace(/,/g, " ");
+        const type = (l.type || "").replace(/,/g, " ");
+        const duration = l.duration || 0;
+        const time = new Date(l.timestamp).toISOString();
+        return `${name},${number},${type},${duration},${time}`;
+      })
+      .join("\n");
+
+    const filename = `${(device.deviceName || "device").replace(/[^a-z0-9]/gi, "_")}_call_logs.csv`;
+    res.setHeader("Content-Type", "text/csv");
+    res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
+    res.send(header + rows);
+  } catch (err) {
+    res.status(500).send(err.message);
+  }
+});
+
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, "0.0.0.0", () => console.log(`🚀 Port ${PORT}`));
